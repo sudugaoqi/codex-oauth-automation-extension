@@ -204,6 +204,71 @@ test('5sim provider rejects maxPrice with custom operator before buying', async 
   assert.deepStrictEqual(requests, []);
 });
 
+test('5sim provider enforces max price and cancels out-of-range activation', async () => {
+  const requests = [];
+  const provider = api.createProvider({
+    fetchImpl: async (url) => {
+      const parsed = new URL(url);
+      requests.push(parsed);
+      if (parsed.pathname === '/v1/guest/products/vietnam/any') {
+        return createTextResponse({ openai: { Category: 'activation', Qty: 10, Price: 0.08 } });
+      }
+      if (parsed.pathname === '/v1/guest/prices') {
+        return createTextResponse({ vietnam: { any: { openai: { cost: 0.08, count: 10 } } } });
+      }
+      if (parsed.pathname === '/v1/user/buy/activation/vietnam/any/openai') {
+        return createTextResponse({ id: 3001, phone: '+84901234567', country: 'vietnam', operator: 'any', price: 0.2, status: 'PENDING' });
+      }
+      if (parsed.pathname === '/v1/user/cancel/3001') {
+        return createTextResponse({ status: 'CANCELED' });
+      }
+      throw new Error(`unexpected ${parsed.pathname}`);
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    () => provider.requestActivation({
+      fiveSimApiKey: 'demo-key',
+      fiveSimCountryId: 'vietnam',
+      fiveSimCountryLabel: '越南 (Vietnam)',
+      fiveSimOperator: 'any',
+      fiveSimMaxPrice: '0.1',
+    }),
+    /outside configured price range/i
+  );
+
+  const buy = requests.find((entry) => entry.pathname.includes('/buy/activation'));
+  assert.equal(buy.searchParams.get('maxPrice'), '0.1');
+  assert.equal(requests.some((entry) => entry.pathname === '/v1/user/cancel/3001'), true);
+});
+
+test('5sim provider ignores minPrice when maxPrice is not set', async () => {
+  const requests = [];
+  const provider = api.createProvider({
+    fetchImpl: async (url) => {
+      const parsed = new URL(url);
+      requests.push(parsed);
+      throw new Error(`unexpected request ${parsed.pathname}`);
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    () => provider.requestActivation({
+      fiveSimApiKey: 'demo-key',
+      fiveSimCountryId: 'vietnam',
+      fiveSimCountryLabel: '越南 (Vietnam)',
+      fiveSimOperator: 'any',
+      fiveSimMinPrice: '0.05',
+    }),
+    /price lower limit requires a maxPrice/i
+  );
+  assert.deepStrictEqual(requests, []);
+});
+
 test('5sim provider reports raw buy payload when HTTP 200 response has no activation', async () => {
   const provider = api.createProvider({
     fetchImpl: async (url) => {

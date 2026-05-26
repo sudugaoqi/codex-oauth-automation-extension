@@ -448,6 +448,42 @@
       return Math.round(parsed * 10000) / 10000;
     }
 
+    function resolvePhoneSmsPriceRange(state = {}, options = {}) {
+      const maxSource = options.maxField === 'fiveSimMaxPrice'
+        ? state?.fiveSimMaxPrice
+        : state?.heroSmsMaxPrice;
+      const minSource = options.minField === 'fiveSimMinPrice'
+        ? state?.fiveSimMinPrice
+        : state?.heroSmsMinPrice;
+      const maxPrice = normalizeHeroSmsPriceLimit(maxSource);
+      const minPrice = normalizeHeroSmsPriceLimit(minSource);
+      if (minPrice !== null && maxPrice === null) {
+        throw new Error('phone SMS price lower limit requires a maxPrice; clear minPrice or set maxPrice before buying a number.');
+      }
+      if (minPrice !== null && maxPrice !== null && minPrice > maxPrice) {
+        throw new Error('phone SMS price lower limit cannot exceed maxPrice.');
+      }
+      return {
+        minPrice,
+        maxPrice,
+        enforceMinPrice: Boolean(options.enforceMinPrice),
+      };
+    }
+
+    function isPriceWithinConfiguredRange(price, range = {}) {
+      const normalizedPrice = normalizeHeroSmsPrice(price);
+      if (normalizedPrice === null) {
+        return true;
+      }
+      if (range.enforceMinPrice && range.minPrice !== null && normalizedPrice < range.minPrice) {
+        return false;
+      }
+      if (range.maxPrice !== null && normalizedPrice > range.maxPrice) {
+        return false;
+      }
+      return true;
+    }
+
     function isPhoneNumberUsedError(value) {
       const text = String(value || '').trim();
       if (!text) {
@@ -757,7 +793,8 @@
     }
 
     async function resolveHeroSmsPricePlanFromPricePayloads(config, countryConfig, state = {}, payloads = []) {
-      const userLimit = normalizeHeroSmsPriceLimit(state.heroSmsMaxPrice);
+      const priceRange = resolvePhoneSmsPriceRange(state, { enforceMinPrice: false });
+      const userLimit = priceRange.maxPrice;
       const inStockCandidates = buildSortedUniquePriceCandidates(
         (Array.isArray(payloads) ? payloads : [])
           .flatMap((payload) => collectHeroSmsPriceCandidates(payload, []))
@@ -1100,6 +1137,7 @@
         successfulUses: normalizeUseCount(record.successfulUses),
         maxUses: Math.max(1, Math.floor(Number(record.maxUses) || DEFAULT_PHONE_NUMBER_MAX_USES)),
         ...(expiresAt > 0 ? { expiresAt } : {}),
+        ...(record.price !== undefined ? { price: Number(record.price) } : {}),
         ...(statusAction ? { statusAction } : {}),
         ...(record.source ? { source: String(record.source || '').trim() } : {}),
         ...(record.phoneCodeReceived ? { phoneCodeReceived: true } : {}),
@@ -1230,6 +1268,22 @@
         : Math.round(normalizedPrice * 10000) / 10000;
     }
 
+    function getActivationEffectivePrice(activation, requestedPrice = null) {
+      const activationPrice = normalizeHeroSmsPrice(activation?.price);
+      if (activationPrice !== null) {
+        return activationPrice;
+      }
+      return normalizeHeroSmsPrice(requestedPrice);
+    }
+
+    async function rejectOutOfRangeActivation(state = {}, activation, price, range = {}, releaseFn = cancelPhoneActivation) {
+      if (isPriceWithinConfiguredRange(price, range)) {
+        return false;
+      }
+      await releaseFn(state, activation);
+      throw new Error(`phone SMS activation price ${price} is outside configured price range.`);
+    }
+
     function forgetActivationAcquiredPriceHint(activation) {
       const key = buildActivationIdentityKey(activation);
       if (!key) {
@@ -1300,6 +1354,9 @@
       }
       if (statusAction) {
         fallback.statusAction = statusAction;
+      }
+      if (record.price !== undefined) {
+        fallback.price = Number(record.price);
       }
 
       return Object.keys(fallback).length ? fallback : null;
@@ -1720,11 +1777,15 @@
         if (!apiKey) {
           throw new Error('5sim API key is missing. Save it in the side panel before running the phone flow.');
         }
-        const configuredMaxPrice = normalizeHeroSmsPriceLimit(state.fiveSimMaxPrice);
+        const fiveSimPriceRange = resolvePhoneSmsPriceRange(state, {
+          minField: 'fiveSimMinPrice',
+          maxField: 'fiveSimMaxPrice',
+          enforceMinPrice: false,
+        });
         const operator = normalizeFiveSimCountryCode(state.fiveSimOperator, DEFAULT_FIVE_SIM_OPERATOR);
-        const maxPriceLimit = configuredMaxPrice !== null
-          ? configuredMaxPrice
-          : normalizeHeroSmsPriceLimit(state.heroSmsMaxPrice);
+        const maxPriceLimit = fiveSimPriceRange.maxPrice !== null
+          ? fiveSimPriceRange.maxPrice
+          : resolvePhoneSmsPriceRange(state, { enforceMinPrice: false }).maxPrice;
         assertFiveSimMaxPriceCompatibleWithOperator(operator, maxPriceLimit);
         return {
           provider,
@@ -2393,6 +2454,7 @@
         countryLabel: countryLabel || countryCode,
         successfulUses: normalizeUseCount(payload.successfulUses ?? fallback.successfulUses ?? 0),
         maxUses: Math.max(1, Math.floor(Number(payload.maxUses ?? fallback.maxUses) || DEFAULT_PHONE_NUMBER_MAX_USES)),
+        ...(payload.price !== undefined ? { price: Number(payload.price) } : {}),
         ...(() => {
           const expiresAt = normalizeTimestampMs(
             payload.expiresAt
@@ -2511,6 +2573,11 @@
           const countryPriceFloor = countryPriceFloorByCountryCode.get(countryCode) ?? null;
           try {
             const explicitFiveSimMaxPriceLimit = normalizeHeroSmsPriceLimit(state.fiveSimMaxPrice);
+            resolvePhoneSmsPriceRange(state, {
+              minField: 'fiveSimMinPrice',
+              maxField: 'fiveSimMaxPrice',
+              enforceMinPrice: false,
+            });
             let guestPricesPayload = null;
             let productPricesPayload = null;
             if (explicitFiveSimMaxPriceLimit !== null) {
@@ -2645,6 +2712,12 @@
                 });
                 if (activation) {
                   const priceValue = Number(candidatePrice);
+                  const effectivePrice = getActivationEffectivePrice(activation, priceValue);
+                  await rejectOutOfRangeActivation(state, activation, effectivePrice, {
+                    minPrice: null,
+                    maxPrice: maxPriceLimit,
+                    enforceMinPrice: false,
+                  });
                   rememberActivationAcquiredPrice(activation, priceValue);
                   acquiredActivation = activation;
                   break;
@@ -3186,13 +3259,15 @@
       }, 'SMSBower getPricesV2');
       const prices = buildSortedUniquePriceCandidates(collectSmsBowerPriceCandidates(payload, []));
       const minCatalogPrice = prices.length ? prices[0] : null;
-      const userLimit = normalizeHeroSmsPriceLimit(state?.heroSmsMaxPrice);
+      const priceRange = resolvePhoneSmsPriceRange(state, { enforceMinPrice: true });
+      const userLimit = priceRange.maxPrice;
       const filteredPrices = userLimit === null
         ? prices
-        : prices.filter((price) => price <= userLimit);
+        : prices.filter((price) => isPriceWithinConfiguredRange(price, priceRange));
       return {
         prices: filteredPrices.length ? filteredPrices : (prices.length ? [] : [null]),
         userLimit,
+        minPrice: priceRange.minPrice,
         minCatalogPrice,
         rawPayload: payload,
       };
@@ -3204,6 +3279,7 @@
       }
 
       const config = resolvePhoneConfig(state);
+      const smsBowerPriceRange = resolvePhoneSmsPriceRange(state, { enforceMinPrice: true });
       const allCountryCandidates = Array.isArray(config.countryCandidates) && config.countryCandidates.length
         ? config.countryCandidates
         : resolveSmsBowerCountryCandidates(state);
@@ -3256,7 +3332,10 @@
                 action: 'getNumber',
                 service: config.serviceCode,
                 country: countryConfig.id,
-                ...(price !== null && price !== undefined ? { maxPrice: price, minPrice: price } : {}),
+                ...(price !== null && price !== undefined ? {
+                  maxPrice: price,
+                  minPrice: smsBowerPriceRange.minPrice !== null ? smsBowerPriceRange.minPrice : price,
+                } : {}),
               }, 'SMSBower getNumber');
               if (isSmsBowerNoNumbersPayload(payload)) {
                 continue;
@@ -3272,6 +3351,8 @@
                 maxUses: 1,
               });
               if (acquired) {
+                const effectivePrice = getActivationEffectivePrice(acquired, price);
+                await rejectOutOfRangeActivation(state, acquired, effectivePrice, smsBowerPriceRange);
                 if (price !== null && price !== undefined) {
                   rememberActivationAcquiredPrice(acquired, price);
                 }
@@ -3336,6 +3417,7 @@
       const allCountryCandidates = Array.isArray(config.countryCandidates) && config.countryCandidates.length
         ? config.countryCandidates
         : resolveCountryCandidates(state);
+      const heroSmsPriceRange = resolvePhoneSmsPriceRange(state, { enforceMinPrice: false });
       if (!allCountryCandidates.length) {
         throw new Error(`Step ${getActivePhoneVerificationVisibleStep()}: HeroSMS countries are empty. Please select at least one country in 接码设置。`);
       }
@@ -3553,6 +3635,8 @@
                 const activation = parseActivationPayload(payload, buildFallbackActivation(requestAction));
                 if (activation) {
                   const numericPrice = Number(maxPrice);
+                  const effectivePrice = getActivationEffectivePrice(activation, numericPrice);
+                  await rejectOutOfRangeActivation(state, activation, effectivePrice, heroSmsPriceRange);
                   rememberActivationAcquiredPrice(activation, numericPrice);
                   return {
                     ...activation,

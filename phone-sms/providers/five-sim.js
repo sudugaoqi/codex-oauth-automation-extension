@@ -242,6 +242,28 @@
       .slice(0, MAX_PRICE_CANDIDATES);
   }
 
+  function resolvePriceRange(state = {}) {
+    const maxPriceText = normalizeFiveSimMaxPrice(state.fiveSimMaxPrice);
+    const minPriceText = normalizeFiveSimMaxPrice(state.fiveSimMinPrice);
+    if (minPriceText && !maxPriceText) {
+      throw new Error('5sim price lower limit requires a maxPrice; clear minPrice or set maxPrice before buying a number.');
+    }
+    const minPrice = minPriceText ? Number(minPriceText) : null;
+    const maxPrice = maxPriceText ? Number(maxPriceText) : null;
+    if (minPrice !== null && maxPrice !== null && minPrice > maxPrice) {
+      throw new Error('5sim price lower limit cannot exceed maxPrice.');
+    }
+    return { minPrice, maxPrice, enforceMinPrice: false };
+  }
+
+  function isPriceWithinRange(price, range = {}) {
+    const numeric = normalizePrice(price);
+    if (numeric === null) return true;
+    if (range.enforceMinPrice && range.minPrice !== null && range.minPrice !== undefined && numeric < range.minPrice) return false;
+    if (range.maxPrice !== null && range.maxPrice !== undefined && numeric > range.maxPrice) return false;
+    return true;
+  }
+
   function describePayload(raw) {
     if (typeof raw === 'string') {
       return raw.trim();
@@ -479,8 +501,8 @@
   }
 
   async function resolvePricePlan(state = {}, countryConfig = resolveCountryConfig(state), deps = {}) {
-    const userLimitText = normalizeFiveSimMaxPrice(state.fiveSimMaxPrice);
-    const userLimit = userLimitText ? Number(userLimitText) : null;
+    const priceRange = resolvePriceRange(state);
+    const userLimit = priceRange.maxPrice;
     let priceCandidates = [];
 
     try {
@@ -512,18 +534,19 @@
 
     const minCatalogPrice = priceCandidates.length > 0 ? priceCandidates[0] : null;
     if (userLimit !== null) {
-      const bounded = priceCandidates.filter((price) => price <= userLimit);
+      const bounded = priceCandidates.filter((price) => isPriceWithinRange(price, priceRange));
       return {
         prices: bounded.length > 0 ? [userLimit, ...bounded.filter((price) => price !== userLimit)] : [userLimit],
         userLimit,
+        minPrice: priceRange.minPrice,
         minCatalogPrice,
       };
     }
 
     if (priceCandidates.length > 0) {
-      return { prices: priceCandidates, userLimit: null, minCatalogPrice };
+      return { prices: priceCandidates, userLimit: null, minPrice: priceRange.minPrice, minCatalogPrice };
     }
-    return { prices: [null], userLimit: null, minCatalogPrice: null };
+    return { prices: [null], userLimit: null, minPrice: priceRange.minPrice, minCatalogPrice: null };
   }
 
   function normalizeActivation(record, fallback = {}) {
@@ -579,6 +602,20 @@
     const operator = normalizeFiveSimOperator(state.fiveSimOperator);
     if (maxPrice && operator !== DEFAULT_OPERATOR) {
       throw new Error('5sim maxPrice only works when operator is "any"; clear the price limit or switch operator to any before buying a number.');
+    }
+  }
+
+  function getActivationPrice(activation, requestedPrice) {
+    const activationPrice = normalizePrice(activation?.price);
+    if (activationPrice !== null) return activationPrice;
+    return normalizePrice(requestedPrice);
+  }
+
+  async function cancelActivationQuietly(state = {}, activation, deps = {}) {
+    try {
+      await cancelActivation(state, activation, deps);
+    } catch (_) {
+      // Best-effort cleanup after rejecting an out-of-range activation.
     }
   }
 
@@ -672,6 +709,7 @@
     let lastError = null;
     let lastFailureText = '';
     let sawOnlyRetryableFailures = true;
+    const priceRange = resolvePriceRange(state);
     for (const attempt of countryAttempts) {
       const countryConfig = attempt.countryConfig;
       const countryFailures = [];
@@ -680,6 +718,11 @@
         try {
           const activation = await buyActivationWithPrice(state, countryConfig, maxPrice, deps);
           if (activation) {
+            const acquiredPrice = getActivationPrice(activation, maxPrice);
+            if (!isPriceWithinRange(acquiredPrice, priceRange)) {
+              await cancelActivationQuietly(state, activation, deps);
+              throw new Error(`5sim activation price ${acquiredPrice} is outside configured price range.`);
+            }
             return activation;
           }
           lastFailureText = '空响应';

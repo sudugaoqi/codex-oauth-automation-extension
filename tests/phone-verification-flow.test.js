@@ -1408,6 +1408,80 @@ test('phone verification helper stops when WRONG_MAX_PRICE exceeds configured ma
   ]);
 });
 
+test('phone verification helper accepts HeroSMS lower bound only when max price is set and enforces upper bound', async () => {
+  const requests = [];
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      requests.push(parsedUrl);
+      const action = parsedUrl.searchParams.get('action');
+      if (action === 'getPrices') {
+        return {
+          ok: true,
+          text: async () => JSON.stringify({
+            52: {
+              dr: {
+                cheap: { cost: 0.04, count: 10 },
+                valid: { cost: 0.08, count: 10 },
+                expensive: { cost: 0.12, count: 10 },
+              },
+            },
+          }),
+        };
+      }
+      if (action === 'getNumber') {
+        return {
+          ok: true,
+          text: async () => 'ACCESS_NUMBER:range-hero:66959916439',
+        };
+      }
+      throw new Error(`Unexpected HeroSMS action: ${action}`);
+    },
+    getState: async () => ({ heroSmsApiKey: 'demo-key', heroSmsMinPrice: '0.05', heroSmsMaxPrice: '0.1', heroSmsActivationRetryRounds: 1 }),
+    sendToContentScriptResilient: async () => ({}),
+    setState: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  const activation = await helpers.requestPhoneActivation({
+    heroSmsApiKey: 'demo-key',
+    heroSmsMinPrice: '0.05',
+    heroSmsMaxPrice: '0.1',
+    heroSmsActivationRetryRounds: 1,
+  });
+
+  assert.equal(activation.activationId, 'range-hero');
+  const getNumberRequests = requests.filter((requestUrl) => requestUrl.searchParams.get('action') === 'getNumber');
+  assert.equal(getNumberRequests.length, 1);
+  assert.equal(getNumberRequests[0].searchParams.get('maxPrice'), '0.04');
+});
+
+test('phone verification helper rejects lower bound without upper bound', async () => {
+  const requests = [];
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      requests.push(url);
+      throw new Error(`Unexpected request: ${url}`);
+    },
+    getState: async () => ({ heroSmsApiKey: 'demo-key', heroSmsMinPrice: '0.05' }),
+    sendToContentScriptResilient: async () => ({}),
+    setState: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    () => helpers.requestPhoneActivation({ heroSmsApiKey: 'demo-key', heroSmsMinPrice: '0.05' }),
+    /price lower limit requires a maxPrice/i
+  );
+  assert.deepStrictEqual(requests, []);
+});
+
 test('phone verification helper falls back to plain getNumber when priced request fails to fetch', async () => {
   const requests = [];
   let getNumberAttempt = 0;
@@ -2272,6 +2346,76 @@ test('phone verification helper acquires a number from SMSBower with ordered fal
   assert.equal(requests[2].searchParams.get('country'), '52');
   assert.equal(requests[3].searchParams.get('action'), 'getNumber');
   assert.equal(requests[3].searchParams.get('country'), '52');
+});
+
+test('phone verification helper passes SMSBower minPrice and maxPrice and cancels out-of-range activation', async () => {
+  const requests = [];
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      requests.push(parsedUrl);
+      const action = parsedUrl.searchParams.get('action');
+      if (action === 'getPricesV2') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ 52: { dr: { '0.08': 10 } } }),
+        };
+      }
+      if (action === 'getNumber') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            activationId: 'sb-out',
+            phoneNumber: '66959916439',
+            price: 0.12,
+          }),
+        };
+      }
+      if (action === 'setStatus') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => 'ACCESS_CANCEL',
+        };
+      }
+      throw new Error(`Unexpected SMSBower action: ${action}`);
+    },
+    getState: async () => ({
+      phoneSmsProvider: 'smsbower',
+      smsBowerApiKey: 'smsbower-key',
+      smsBowerCountryOrder: [52],
+      heroSmsMinPrice: '0.05',
+      heroSmsMaxPrice: '0.1',
+      heroSmsActivationRetryRounds: 1,
+    }),
+    sendToContentScriptResilient: async () => ({}),
+    setState: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    () => helpers.requestPhoneActivation({
+      phoneSmsProvider: 'smsbower',
+      smsBowerApiKey: 'smsbower-key',
+      smsBowerCountryOrder: [52],
+      heroSmsMinPrice: '0.05',
+      heroSmsMaxPrice: '0.1',
+      heroSmsActivationRetryRounds: 1,
+    }),
+    /outside configured price range/i
+  );
+
+  const getNumber = requests.find((requestUrl) => requestUrl.searchParams.get('action') === 'getNumber');
+  assert.equal(getNumber.searchParams.get('minPrice'), '0.05');
+  assert.equal(getNumber.searchParams.get('maxPrice'), '0.08');
+  const setStatus = requests.find((requestUrl) => requestUrl.searchParams.get('action') === 'setStatus');
+  assert.equal(setStatus.searchParams.get('id'), 'sb-out');
+  assert.equal(setStatus.searchParams.get('status'), '8');
 });
 
 test('phone verification helper polls and parses SMSBower verification codes', async () => {

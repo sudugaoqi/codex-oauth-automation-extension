@@ -60,6 +60,9 @@ test('background account history settings are normalized independently from hotm
     extractFunction('normalizeSignupMethod'),
     extractFunction('normalizeFiveSimCountryCode'),
     extractFunction('normalizeFiveSimCountryOrder'),
+    extractFunction('normalizeSmsBowerCountryId'),
+    extractFunction('normalizeSmsBowerCountryLabel'),
+    extractFunction('normalizeSmsBowerCountryOrder'),
     extractFunction('normalizeNexSmsCountryId'),
     extractFunction('normalizeNexSmsCountryOrder'),
     extractFunction('normalizeNexSmsServiceCode'),
@@ -113,8 +116,9 @@ const HERO_SMS_COUNTRY_ID = 52;
 const HERO_SMS_COUNTRY_LABEL = 'Thailand';
 const PHONE_SMS_PROVIDER_HERO_SMS = 'hero-sms';
 const PHONE_SMS_PROVIDER_FIVE_SIM = '5sim';
+const PHONE_SMS_PROVIDER_SMSBOWER = 'smsbower';
 const PHONE_SMS_PROVIDER_NEXSMS = 'nexsms';
-const DEFAULT_PHONE_SMS_PROVIDER_ORDER = ['hero-sms', '5sim', 'nexsms'];
+const DEFAULT_PHONE_SMS_PROVIDER_ORDER = ['hero-sms', '5sim', 'nexsms', 'smsbower'];
 const DEFAULT_PHONE_SMS_PROVIDER = PHONE_SMS_PROVIDER_HERO_SMS;
 const SIGNUP_METHOD_EMAIL = 'email';
 const SIGNUP_METHOD_PHONE = 'phone';
@@ -123,6 +127,8 @@ const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';
 const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
 const PLUS_PAYMENT_METHOD_GPC_HELPER = 'gpc-helper';
 const DEFAULT_FIVE_SIM_PRODUCT = 'openai';
+const DEFAULT_SMS_BOWER_COUNTRY_ID = 52;
+const DEFAULT_SMS_BOWER_COUNTRY_LABEL = '泰国 (Thailand)';
 const DEFAULT_NEX_SMS_SERVICE_CODE = 'ot';
 const FIVE_SIM_COUNTRY_ID = 'vietnam';
 const FIVE_SIM_COUNTRY_LABEL = '越南 (Vietnam)';
@@ -235,9 +241,13 @@ return {
   assert.equal(api.normalizePersistentSettingValue('signupPhoneUseTempNumber', 1), true);
   assert.equal(api.normalizePersistentSettingValue('signupPhoneUseTempNumber', 0), false);
   assert.equal(api.normalizePersistentSettingValue('phoneSmsProvider', '5SIM'), '5sim');
+  assert.equal(api.normalizePersistentSettingValue('phoneSmsProvider', 'SMSBOWER'), 'smsbower');
   assert.equal(api.normalizePersistentSettingValue('phoneSmsProvider', 'NEXSMS'), 'nexsms');
   assert.equal(api.normalizePersistentSettingValue('phoneSmsProvider', 'unknown'), 'hero-sms');
-  assert.deepStrictEqual(api.normalizePersistentSettingValue('phoneSmsProviderOrder', ['nexsms', '5sim', 'nexsms']), ['nexsms', '5sim']);
+  assert.deepStrictEqual(
+    api.normalizePersistentSettingValue('phoneSmsProviderOrder', ['smsbower', 'nexsms', '5sim', 'nexsms']),
+    ['smsbower', 'nexsms', '5sim']
+  );
   assert.equal(api.normalizePersistentSettingValue('fiveSimApiKey', ' demo-five '), ' demo-five ');
   assert.equal(api.normalizePersistentSettingValue('fiveSimProduct', ' OpenAI! '), 'openai');
   assert.equal(api.normalizePersistentSettingValue('fiveSimCountryId', ' England! '), 'england');
@@ -246,6 +256,14 @@ return {
   assert.equal(api.normalizePersistentSettingValue('fiveSimMaxPrice', '9.87654'), '9.8765');
   assert.equal(api.normalizePersistentSettingValue('fiveSimMaxPrice', '-1'), '');
   assert.equal(api.normalizePersistentSettingValue('fiveSimOperator', ''), 'any');
+  assert.equal(api.normalizePersistentSettingValue('smsBowerApiKey', ' demo-smsbower '), ' demo-smsbower ');
+  assert.equal(api.normalizePersistentSettingValue('smsBowerCountryId', ' 16 '), 16);
+  assert.equal(api.normalizePersistentSettingValue('smsBowerCountryId', ''), 52);
+  assert.equal(api.normalizePersistentSettingValue('smsBowerCountryLabel', ''), '泰国 (Thailand)');
+  assert.deepStrictEqual(
+    api.normalizePersistentSettingValue('smsBowerCountryOrder', [16, '52', 16]),
+    [16, 52]
+  );
   assert.deepStrictEqual(
     api.normalizePersistentSettingValue('fiveSimCountryFallback', [{ id: 'usa', label: 'USA' }, 'thailand:Thailand']),
     [{ id: 'usa', label: 'USA' }, { id: 'thailand', label: 'Thailand' }]

@@ -1262,21 +1262,23 @@
               <select id="select-phone-sms-provider" class="data-select mono">
                 <option value="hero-sms">HeroSMS</option>
                 <option value="5sim">5sim</option>
+                <option value="smsbower">SMSBower</option>
                 <option value="nexsms">NexSMS</option>
               </select>
             </div>
             <div class="data-row" id="row-phone-sms-provider-order" style="display:none;">
               <span class="data-label">服务商顺序</span>
               <div class="data-inline hero-sms-country-stack">
-                <select id="select-phone-sms-provider-order" class="data-input mono" multiple size="3" style="display:none;">
+                <select id="select-phone-sms-provider-order" class="data-input mono" multiple size="4" style="display:none;">
                   <option value="hero-sms" selected>HeroSMS</option>
                   <option value="5sim" selected>5sim</option>
+                  <option value="smsbower" selected>SMSBower</option>
                   <option value="nexsms" selected>NexSMS</option>
                 </select>
                 <div class="hero-sms-country-mainline">
                   <div id="phone-sms-provider-order-menu-shell" class="hero-sms-country-menu">
                     <button id="btn-phone-sms-provider-order-menu" class="btn btn-outline btn-sm hero-sms-country-menu-btn" type="button" aria-haspopup="listbox" aria-expanded="false">
-                      HeroSMS / 5sim / NexSMS (3/3)
+                      HeroSMS / 5sim / SMSBower / NexSMS (4/4)
                     </button>
                     <div id="phone-sms-provider-order-menu" class="hero-sms-country-menu-dropdown" role="listbox" aria-multiselectable="true" hidden></div>
                   </div>
@@ -1345,6 +1347,16 @@
                 <button id="btn-toggle-five-sim-api-key" class="input-icon-btn" type="button"
                   data-password-toggle="input-five-sim-api-key" data-show-label="显示 5sim API Key"
                   data-hide-label="隐藏 5sim API Key" aria-label="显示 5sim API Key" title="显示 5sim API Key"></button>
+              </div>
+            </div>
+            <div class="data-row" id="row-smsbower-api-key" style="display:none;">
+              <span class="data-label">SMSBower API</span>
+              <div class="input-with-icon">
+                <input type="password" id="input-smsbower-api-key" class="data-input data-input-with-icon mono"
+                  placeholder="请输入 SMSBower API Key" />
+                <button id="btn-toggle-smsbower-api-key" class="input-icon-btn" type="button"
+                  data-password-toggle="input-smsbower-api-key" data-show-label="显示 SMSBower API Key"
+                  data-hide-label="隐藏 SMSBower API Key" aria-label="显示 SMSBower API Key" title="显示 SMSBower API Key"></button>
               </div>
             </div>
             <div class="data-row" id="row-five-sim-country" style="display:none;">

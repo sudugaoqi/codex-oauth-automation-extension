@@ -2183,6 +2183,231 @@ test('phone verification helper polls and parses NexSMS verification codes', asy
   assert.equal(statusUpdates.length >= 1, true);
 });
 
+test('phone verification helper acquires a number from SMSBower with ordered fallback countries', async () => {
+  const requests = [];
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      requests.push(parsedUrl);
+      const action = parsedUrl.searchParams.get('action');
+      const country = Number(parsedUrl.searchParams.get('country'));
+
+      if (action === 'getPricesV2') {
+        if (country === 16) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ 16: { dr: {} } }),
+          };
+        }
+        if (country === 52) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ 52: { dr: { '0.134': 928 } } }),
+          };
+        }
+      }
+
+      if (action === 'getNumber') {
+        if (country === 16) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => 'NO_NUMBERS',
+          };
+        }
+        if (country === 52) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => 'ACCESS_NUMBER:sb-123:66959916439',
+          };
+        }
+      }
+
+      throw new Error(`Unexpected SMSBower request: ${parsedUrl.toString()}`);
+    },
+    getState: async () => ({
+      phoneSmsProvider: 'smsbower',
+      smsBowerApiKey: 'smsbower-key',
+      smsBowerCountryOrder: [16, 52],
+      smsBowerCountryLabel: 'Thailand',
+      heroSmsActivationRetryRounds: 1,
+    }),
+    sendToContentScriptResilient: async () => ({}),
+    setState: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  const activation = await helpers.requestPhoneActivation({
+    phoneSmsProvider: 'smsbower',
+    smsBowerApiKey: 'smsbower-key',
+    smsBowerCountryOrder: [16, 52],
+    smsBowerCountryLabel: 'Thailand',
+    heroSmsActivationRetryRounds: 1,
+  });
+
+  assert.deepStrictEqual(activation, {
+    activationId: 'sb-123',
+    phoneNumber: '66959916439',
+    provider: 'smsbower',
+    serviceCode: 'dr',
+    countryId: 52,
+    countryLabel: 'Thailand',
+    successfulUses: 0,
+    maxUses: 1,
+  });
+  assert.equal(requests[0].searchParams.get('action'), 'getPricesV2');
+  assert.equal(requests[0].searchParams.get('service'), 'dr');
+  assert.equal(requests[0].searchParams.get('country'), '16');
+  assert.equal(requests[0].searchParams.get('api_key'), 'smsbower-key');
+  assert.equal(requests[1].searchParams.get('action'), 'getNumber');
+  assert.equal(requests[1].searchParams.get('service'), 'dr');
+  assert.equal(requests[1].searchParams.get('country'), '16');
+  assert.equal(requests[2].searchParams.get('action'), 'getPricesV2');
+  assert.equal(requests[2].searchParams.get('country'), '52');
+  assert.equal(requests[3].searchParams.get('action'), 'getNumber');
+  assert.equal(requests[3].searchParams.get('country'), '52');
+});
+
+test('phone verification helper polls and parses SMSBower verification codes', async () => {
+  let pollCount = 0;
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      assert.equal(parsedUrl.searchParams.get('action'), 'getStatus');
+      assert.equal(parsedUrl.searchParams.get('id'), 'sb-123');
+      assert.equal(parsedUrl.searchParams.get('api_key'), 'smsbower-key');
+      pollCount += 1;
+      return {
+        ok: true,
+        status: 200,
+        text: async () => (pollCount === 1 ? 'STATUS_WAIT_CODE' : 'STATUS_OK:998877'),
+      };
+    },
+    getState: async () => ({
+      phoneSmsProvider: 'smsbower',
+      smsBowerApiKey: 'smsbower-key',
+      smsBowerCountryOrder: [52],
+    }),
+    sendToContentScriptResilient: async () => ({}),
+    setState: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  const code = await helpers.pollPhoneActivationCode(
+    {
+      phoneSmsProvider: 'smsbower',
+      smsBowerApiKey: 'smsbower-key',
+      smsBowerCountryOrder: [52],
+    },
+    {
+      activationId: 'sb-123',
+      phoneNumber: '66959916439',
+      provider: 'smsbower',
+      serviceCode: 'dr',
+      countryId: 52,
+      countryLabel: 'Thailand',
+      successfulUses: 0,
+      maxUses: 1,
+    },
+    {
+      timeoutMs: 5000,
+      intervalMs: 1,
+      maxRounds: 5,
+    }
+  );
+
+  assert.equal(code, '998877');
+  assert.equal(pollCount, 2);
+});
+
+test('phone verification helper rejects SMSBower reuse and ignores temporary signup number flow during signup acquisition', async () => {
+  const requests = [];
+  const logs = [];
+  let currentState = {
+    phoneSmsProvider: 'smsbower',
+    smsBowerApiKey: 'smsbower-key',
+    smsBowerCountryOrder: [52],
+    signupPhoneUseTempNumber: true,
+    heroSmsActivationRetryRounds: 1,
+  };
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async (message) => {
+      logs.push(String(message || ''));
+    },
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      requests.push(parsedUrl);
+      const action = parsedUrl.searchParams.get('action');
+      if (action === 'getPricesV2') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ 52: { dr: { '0.134': 928 } } }),
+        };
+      }
+      if (action === 'getNumber') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => 'ACCESS_NUMBER:sb-123:66959916439',
+        };
+      }
+      throw new Error(`Unexpected SMSBower request: ${parsedUrl.toString()}`);
+    },
+    getState: async () => currentState,
+    sendToContentScriptResilient: async () => ({}),
+    setState: async (updates) => {
+      currentState = { ...currentState, ...updates };
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    () => helpers.reactivatePhoneActivation(
+      {
+        phoneSmsProvider: 'smsbower',
+        smsBowerApiKey: 'smsbower-key',
+      },
+      {
+        activationId: 'sb-123',
+        phoneNumber: '66959916439',
+        provider: 'smsbower',
+        serviceCode: 'dr',
+        countryId: 52,
+        countryLabel: 'Thailand',
+        successfulUses: 0,
+        maxUses: 1,
+      }
+    ),
+    /SMSBower does not support activation reuse/
+  );
+
+  const activation = await helpers.prepareSignupPhoneActivation(currentState);
+
+  assert.equal(activation.activationId, 'sb-123');
+  assert.equal(activation.phoneNumber, '66959916439');
+  assert.equal(activation.provider, 'smsbower');
+  assert.deepStrictEqual(
+    requests.map((request) => request.searchParams.get('action')),
+    ['getPricesV2', 'getNumber']
+  );
+  assert.ok(logs.some((message) => /SMSBower .*临时租号|temporary signup phone numbers/i.test(message)));
+  assert.equal(currentState.signupPhoneNumber, '66959916439');
+  assert.equal(currentState.accountIdentifierType, 'phone');
+  assert.equal(currentState.accountIdentifier, '66959916439');
+});
+
 test('phone verification helper completes add-phone flow, clears current activation, and stores reusable number state', async () => {
   const requests = [];
   const stateUpdates = [];

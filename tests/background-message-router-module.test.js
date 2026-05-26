@@ -17,6 +17,16 @@ test('background defaults enable free phone reuse switches', () => {
   assert.match(defaultsBlock, /freePhoneReuseAutoEnabled:\s*true/);
 });
 
+test('background defaults persist phone SMS price lower limits', () => {
+  const source = fs.readFileSync('background.js', 'utf8');
+  const defaultsStart = source.indexOf('const PERSISTED_SETTING_DEFAULTS = {');
+  const defaultsEnd = source.indexOf('const PERSISTED_SETTING_KEYS = Object.keys(PERSISTED_SETTING_DEFAULTS);');
+  const defaultsBlock = source.slice(defaultsStart, defaultsEnd);
+
+  assert.match(defaultsBlock, /heroSmsMinPrice:\s*''/);
+  assert.match(defaultsBlock, /fiveSimMinPrice:\s*''/);
+});
+
 test('background free reusable phone setter does not depend on module-scoped phone flow constants', () => {
   const source = fs.readFileSync('background.js', 'utf8');
   const setterStart = source.indexOf('async function setFreeReusablePhoneActivation');

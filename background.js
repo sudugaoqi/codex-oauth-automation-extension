@@ -716,6 +716,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   heroSmsReuseEnabled: DEFAULT_HERO_SMS_REUSE_ENABLED,
   heroSmsAcquirePriority: DEFAULT_HERO_SMS_ACQUIRE_PRIORITY,
   heroSmsMaxPrice: '',
+  heroSmsMinPrice: '',
   heroSmsPreferredPrice: '',
   heroSmsCountryId: HERO_SMS_COUNTRY_ID,
   heroSmsCountryLabel: HERO_SMS_COUNTRY_LABEL,
@@ -727,6 +728,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   fiveSimCountryFallback: [],
   fiveSimCountryOrder: [...DEFAULT_FIVE_SIM_COUNTRY_ORDER],
   fiveSimMaxPrice: '',
+  fiveSimMinPrice: '',
   fiveSimOperator: FIVE_SIM_OPERATOR,
   smsBowerApiKey: '',
   smsBowerCountryId: DEFAULT_SMS_BOWER_COUNTRY_ID,
@@ -2548,6 +2550,8 @@ function normalizePersistentSettingValue(key, value) {
       return normalizeHeroSmsAcquirePriority(value);
     case 'heroSmsMaxPrice':
       return normalizeHeroSmsMaxPrice(value);
+    case 'heroSmsMinPrice':
+      return normalizeHeroSmsMaxPrice(value);
     case 'heroSmsPreferredPrice':
       return normalizeHeroSmsMaxPrice(value);
     case 'heroSmsCountryId': {
@@ -2574,6 +2578,8 @@ function normalizePersistentSettingValue(key, value) {
     case 'fiveSimCountryOrder':
       return normalizeFiveSimCountryOrder(value);
     case 'fiveSimMaxPrice':
+      return normalizeFiveSimMaxPrice(value);
+    case 'fiveSimMinPrice':
       return normalizeFiveSimMaxPrice(value);
     case 'fiveSimOperator':
       return normalizeFiveSimOperator(value);

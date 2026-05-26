@@ -235,6 +235,8 @@ return {
   assert.equal(api.normalizePersistentSettingValue('phoneCodePollMaxRounds', '18'), 18);
   assert.equal(api.normalizePersistentSettingValue('heroSmsMaxPrice', '0.123456'), '0.1235');
   assert.equal(api.normalizePersistentSettingValue('heroSmsMaxPrice', '0'), '');
+  assert.equal(api.normalizePersistentSettingValue('heroSmsMinPrice', '0.05678'), '0.0568');
+  assert.equal(api.normalizePersistentSettingValue('heroSmsMinPrice', '-1'), '');
   assert.equal(api.normalizePersistentSettingValue('heroSmsPreferredPrice', '0.051234'), '0.0512');
   assert.equal(api.normalizePersistentSettingValue('signupMethod', 'phone'), 'phone');
   assert.equal(api.normalizePersistentSettingValue('signupMethod', 'unknown'), 'email');
@@ -255,6 +257,8 @@ return {
   assert.equal(api.normalizePersistentSettingValue('fiveSimCountryLabel', ''), '越南 (Vietnam)');
   assert.equal(api.normalizePersistentSettingValue('fiveSimMaxPrice', '9.87654'), '9.8765');
   assert.equal(api.normalizePersistentSettingValue('fiveSimMaxPrice', '-1'), '');
+  assert.equal(api.normalizePersistentSettingValue('fiveSimMinPrice', '1.23456'), '1.2346');
+  assert.equal(api.normalizePersistentSettingValue('fiveSimMinPrice', '0'), '');
   assert.equal(api.normalizePersistentSettingValue('fiveSimOperator', ''), 'any');
   assert.equal(api.normalizePersistentSettingValue('smsBowerApiKey', ' demo-smsbower '), ' demo-smsbower ');
   assert.equal(api.normalizePersistentSettingValue('smsBowerCountryId', ' 16 '), 16);

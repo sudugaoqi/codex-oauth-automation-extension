@@ -2492,11 +2492,13 @@ const SIGNUP_USER_ALREADY_EXISTS_ERROR_PREFIX = 'SIGNUP_USER_ALREADY_EXISTS::';
 const SIGNUP_PHONE_PASSWORD_MISMATCH_ERROR_PREFIX = 'SIGNUP_PHONE_PASSWORD_MISMATCH::';
 const SIGNUP_AUTH_RESTART_CURRENT_ATTEMPT_ERROR_PREFIX = 'SIGNUP_AUTH_RESTART_CURRENT_ATTEMPT::';
 const SIGNUP_PHONE_ALREADY_EXISTS_ERROR_PREFIX = 'SIGNUP_PHONE_ALREADY_EXISTS::';
+const SIGNUP_PHONE_CREATE_ACCOUNT_FAILED_ERROR_PREFIX = 'SIGNUP_PHONE_CREATE_ACCOUNT_FAILED::';
 const AUTH_MAX_CHECK_ATTEMPTS_ERROR_PREFIX = 'AUTH_MAX_CHECK_ATTEMPTS::';
 const STEP8_EMAIL_IN_USE_ERROR_PREFIX = 'STEP8_EMAIL_IN_USE::';
 const SIGNUP_EMAIL_EXISTS_PATTERN = /与此电子邮件地址相关联的帐户已存在|account\s+associated\s+with\s+this\s+email\s+address\s+already\s+exists|email\s+address.*already\s+exists/i;
 const SIGNUP_PHONE_PASSWORD_MISMATCH_PATTERN = /incorrect\s+phone\s+number\s+or\s+password|phone\s+number\s+or\s+password/i;
 const SIGNUP_PHONE_ALREADY_EXISTS_PATTERN = /与此电话号码相关联的帐户已存在|account\s+associated\s+with\s+this\s+phone\s+number\s+already\s+exists|phone\s+number.*already\s+exists|account.*already\s+linked.*phone|phone\s+number.*already\s+linked/i;
+const SIGNUP_PHONE_CREATE_ACCOUNT_FAILED_PATTERN = /创建帐户失败，请重试|unable\s+to\s+create\s+(?:your\s+)?account|couldn'?t\s+create\s+(?:your\s+)?account/i;
 
 const authPageRecovery = self.MultiPageAuthPageRecovery?.createAuthPageRecovery?.({
   detailPattern: AUTH_TIMEOUT_ERROR_DETAIL_PATTERN,
@@ -2574,6 +2576,14 @@ function createSignupPhoneAlreadyExistsError(detailText = '') {
   const suffix = detail ? `页面提示：${detail}` : '页面提示该手机号已存在。';
   return new Error(
     `${SIGNUP_PHONE_ALREADY_EXISTS_ERROR_PREFIX}步骤 3：检测到注册手机号已存在，需要重新开始当前轮。${suffix}`
+  );
+}
+
+function createSignupPhoneCreateAccountFailedError(detailText = '') {
+  const detail = String(detailText || '').replace(/\s+/g, ' ').trim();
+  const suffix = detail ? `页面提示：${detail}` : '页面提示创建帐户失败，请重试。';
+  return new Error(
+    `${SIGNUP_PHONE_CREATE_ACCOUNT_FAILED_ERROR_PREFIX}步骤 3：检测到注册手机号创建帐户失败，需要重新开始当前轮。${suffix}`
   );
 }
 
@@ -4512,6 +4522,9 @@ async function waitForSignupVerificationTransition(timeout = 5000) {
 
 async function prepareSignupVerificationFlow(payload = {}, timeout = 30000) {
   const { password } = payload;
+  const accountIdentifierType = String(payload?.accountIdentifierType || '').trim().toLowerCase();
+  const isPhoneSignupFlow = accountIdentifierType === 'phone'
+    || String(payload?.signupMethod || '').trim().toLowerCase() === 'phone';
   const prepareSource = String(payload?.prepareSource || '').trim() || 'step4_execute';
   const prepareLogLabel = String(payload?.prepareLogLabel || '').trim()
     || (prepareSource === 'step3_finalize' ? '步骤 3 收尾' : '步骤 4 执行');
@@ -4577,6 +4590,9 @@ async function prepareSignupVerificationFlow(payload = {}, timeout = 30000) {
         log(`${prepareLogLabel}：检测到密码页报错“${snapshot.passwordErrorText}”，当前轮将回到步骤 1 重新开始。`, 'warn');
         if (SIGNUP_PHONE_ALREADY_EXISTS_PATTERN.test(snapshot.passwordErrorText)) {
           throw createSignupPhoneAlreadyExistsError(snapshot.passwordErrorText);
+        }
+        if (isPhoneSignupFlow && SIGNUP_PHONE_CREATE_ACCOUNT_FAILED_PATTERN.test(snapshot.passwordErrorText)) {
+          throw createSignupPhoneCreateAccountFailedError(snapshot.passwordErrorText);
         }
         throw createSignupPhonePasswordMismatchError(snapshot.passwordErrorText);
       }

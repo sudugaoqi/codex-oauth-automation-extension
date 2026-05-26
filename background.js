@@ -7586,6 +7586,11 @@ function isSignupPhonePasswordMismatchFailure(error) {
   return /SIGNUP_PHONE_PASSWORD_MISMATCH::/i.test(message);
 }
 
+function isSignupPhoneCreateAccountFailedFailure(error) {
+  const message = getErrorMessage(error);
+  return /SIGNUP_PHONE_CREATE_ACCOUNT_FAILED::/i.test(message);
+}
+
 function getSignupPhonePasswordMismatchRestartPayload(preservedState = {}) {
   const preservedEmail = String(preservedState.email || '').trim();
   const preservedPassword = String(preservedState.password || '').trim();
@@ -7642,6 +7647,22 @@ async function restartSignupPhonePasswordMismatchAttemptFromStep(step, restartCo
     `步骤 ${step}：检测到${reasonLabel}，准备丢弃当前注册手机号并回到步骤 1 重新开始（第 ${restartCount} 次重开）。${phoneSuffix}${emailSuffix}原因：${getErrorMessage(error)}`,
     'warn'
   );
+  const activeSignupActivation = preservedState?.signupPhoneActivation || null;
+  const cancelSignupPhoneActivation = (
+    typeof phoneVerificationHelpers !== 'undefined'
+    && typeof phoneVerificationHelpers?.cancelSignupPhoneActivation === 'function'
+  )
+    ? phoneVerificationHelpers.cancelSignupPhoneActivation.bind(phoneVerificationHelpers)
+    : null;
+  if (activeSignupActivation && cancelSignupPhoneActivation) {
+    try {
+      await addLog(`步骤 ${step}：准备释放当前注册手机号接码订单 ${activeSignupPhoneNumber || activeSignupActivation.phoneNumber || activeSignupActivation.activationId || ''}。`, 'warn');
+      await cancelSignupPhoneActivation(preservedState, activeSignupActivation);
+      await addLog(`步骤 ${step}：已请求释放当前注册手机号接码订单。`, 'warn');
+    } catch (releaseError) {
+      await addLog(`步骤 ${step}：释放当前注册手机号接码订单失败，仍将继续重开。原因：${getErrorMessage(releaseError)}`, 'warn');
+    }
+  }
   await invalidateDownstreamAfterStepRestart(1, {
     logLabel: String(options.logLabel || `步骤 ${step} 检测到${reasonLabel}后准备回到步骤 1 重新获取手机号重试（第 ${restartCount} 次重开）`),
   });
@@ -10388,15 +10409,18 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
           throw err;
         }
         const requiresSignupPhoneRestart = isSignupPhonePasswordMismatchFailure(err)
+          || isSignupPhoneCreateAccountFailedFailure(err)
           || /SIGNUP_AUTH_RESTART_CURRENT_ATTEMPT::|SIGNUP_PHONE_ALREADY_EXISTS::/i.test(getErrorMessage(err));
         if (requiresSignupPhoneRestart) {
           step4RestartCount += 1;
           await restartSignupPhonePasswordMismatchAttemptFromStep(3, step4RestartCount, err, {
             reasonLabel: /SIGNUP_PHONE_ALREADY_EXISTS::/i.test(getErrorMessage(err))
               ? '注册手机号已存在'
-              : (isSignupPhonePasswordMismatchFailure(err)
-                ? '手机号/密码不匹配'
-                : '注册认证错误页（fraud_guard）'),
+              : (isSignupPhoneCreateAccountFailedFailure(err)
+                ? '创建帐户失败'
+                : (isSignupPhonePasswordMismatchFailure(err)
+                  ? '手机号/密码不匹配'
+                  : '注册认证错误页（fraud_guard）')),
           });
           currentStartStep = 1;
           continueCurrentAttempt = true;
@@ -10469,14 +10493,17 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
         }
         step4RestartCount += 1;
         const requiresSignupPhoneRestart = isSignupPhonePasswordMismatchFailure(err)
+          || isSignupPhoneCreateAccountFailedFailure(err)
           || /SIGNUP_AUTH_RESTART_CURRENT_ATTEMPT::|SIGNUP_PHONE_ALREADY_EXISTS::/i.test(getErrorMessage(err));
         if (requiresSignupPhoneRestart) {
           await restartSignupPhonePasswordMismatchAttemptFromStep(4, step4RestartCount, err, {
             reasonLabel: /SIGNUP_PHONE_ALREADY_EXISTS::/i.test(getErrorMessage(err))
               ? '注册手机号已存在'
-              : (isSignupPhonePasswordMismatchFailure(err)
-                ? '手机号/密码不匹配'
-                : '注册认证错误页（fraud_guard）'),
+              : (isSignupPhoneCreateAccountFailedFailure(err)
+                ? '创建帐户失败'
+                : (isSignupPhonePasswordMismatchFailure(err)
+                  ? '手机号/密码不匹配'
+                  : '注册认证错误页（fraud_guard）')),
           });
         } else {
           const preservedState = await getState();

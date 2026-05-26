@@ -631,12 +631,12 @@ ${extractFunction('getLoginPhoneHiddenValueDiagnostics')}
 ${extractFunction('fillLoginPhoneInputAndConfirm')}
 
 return {
-  run() {
+  run(runOptions = {}) {
     return fillLoginPhoneInputAndConfirm(phoneInput, {
-      phoneNumber: '447780579093',
-      dialCode: '44',
-      visibleStep: 7,
-      maxAttempts: 2,
+      phoneNumber: runOptions.phoneNumber || '447780579093',
+      dialCode: runOptions.dialCode || '44',
+      visibleStep: runOptions.visibleStep || 7,
+      maxAttempts: runOptions.maxAttempts || 2,
     });
   },
   getFills() {
@@ -693,4 +693,23 @@ test('step 7 stops before submit when phone fill never includes the local number
   await assert.rejects(api.run, /7780579093/);
   assert.equal(api.getValue(), '+44');
   assert.deepEqual(api.getFills(), ['+447780579093', '7780579093', '+447780579093', '7780579093']);
+});
+
+test('step 7 prepends plus before filling login phone when raw number lacks plus', async () => {
+  const api = createPhoneFillApi((input, value) => {
+    input.value = value;
+  }, { initialValue: '+63' });
+
+  const result = await api.run({
+    phoneNumber: '639707395626',
+    dialCode: '63',
+    visibleStep: 7,
+    maxAttempts: 2,
+  });
+
+  assert.equal(result.inputValue, '9707395626');
+  assert.equal(result.attemptedValue, '+639707395626');
+  assert.equal(api.getValue(), '+639707395626');
+  assert.equal(api.getHiddenValue(), '+639707395626');
+  assert.deepEqual(api.getFills(), ['+639707395626']);
 });

@@ -138,6 +138,10 @@
         source: 'background',
         payload: {
           password: state.password || state.customPassword || '',
+          accountIdentifierType: String(state?.accountIdentifierType || '').trim().toLowerCase() === 'phone'
+            ? 'phone'
+            : '',
+          signupMethod: String(resolveSignupMethod(state) || '').trim().toLowerCase(),
           prepareSource: 'step4_execute',
           prepareLogLabel: '步骤 4 执行',
         },

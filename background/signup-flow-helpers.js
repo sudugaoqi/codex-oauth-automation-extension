@@ -216,6 +216,7 @@
         throw new Error(`认证页面标签页已关闭，无法完成步骤 ${step} 的提交后确认。`);
       }
 
+      const currentState = await getState();
       await ensureContentScriptReadyOnTab('signup-page', tabId, {
         inject: SIGNUP_PAGE_INJECT_FILES,
         injectSource: 'signup-page',
@@ -232,6 +233,10 @@
           source: 'background',
           payload: {
             password: password || '',
+            accountIdentifierType: String(currentState?.accountIdentifierType || '').trim().toLowerCase() === 'phone'
+              ? 'phone'
+              : '',
+            signupMethod: String(currentState?.signupMethod || '').trim().toLowerCase(),
             prepareSource: 'step3_finalize',
             prepareLogLabel: '步骤 3 收尾',
           },

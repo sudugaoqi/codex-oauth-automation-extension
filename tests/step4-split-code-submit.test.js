@@ -52,6 +52,15 @@ function extractFunction(name) {
   return source.slice(start, end);
 }
 
+function extractConst(name) {
+  const pattern = new RegExp(`const\\s+${name}\\s*=\\s*[\\s\\S]*?;`);
+  const match = source.match(pattern);
+  if (!match) {
+    throw new Error(`missing const ${name}`);
+  }
+  return match[0];
+}
+
 test('fillVerificationCode submits after split inputs are stably filled', async () => {
   const api = new Function(`
 const logs = [];
@@ -620,6 +629,7 @@ return {
 });
 
 test('prepareSignupVerificationFlow waits for complete verification page before reporting ready', async () => {
+  const originalDateNow = Date.now;
   const api = new Function(`
 const logs = [];
 let now = 0;
@@ -709,16 +719,21 @@ return {
 };
 `)();
 
-  const result = await api.run();
-  const snapshot = api.snapshot();
+  try {
+    const result = await api.run();
+    const snapshot = api.snapshot();
 
-  assert.equal(result.ready, true);
-  assert.equal(snapshot.readyState, 'complete');
-  assert.equal(snapshot.sleepCalls >= 3, true);
-  assert.equal(snapshot.targetChecks >= 1, true);
+    assert.equal(result.ready, true);
+    assert.equal(snapshot.readyState, 'complete');
+    assert.equal(snapshot.sleepCalls >= 3, true);
+    assert.equal(snapshot.targetChecks >= 1, true);
+  } finally {
+    Date.now = originalDateNow;
+  }
 });
 
 test('prepareSignupVerificationFlow stops immediately when password page shows phone/password mismatch', async () => {
+  const originalDateNow = Date.now;
   const api = new Function(`
 const logs = [];
 const clicks = [];
@@ -755,6 +770,7 @@ function logSignupPasswordDiagnostics() {}
 function createSignupPhonePasswordMismatchError(detailText = '') {
   return new Error('SIGNUP_PHONE_PASSWORD_MISMATCH::' + detailText);
 }
+const SIGNUP_PHONE_ALREADY_EXISTS_PATTERN = /与此电话号码相关联的帐户已存在|account\\s+associated\\s+with\\s+this\\s+phone\\s+number\\s+already\\s+exists|phone\\s+number.*already\\s+exists|account.*already\\s+linked.*phone|phone\\s+number.*already\\s+linked/i;
 
 const location = {
   href: 'https://auth.openai.com/log-in/password',
@@ -799,10 +815,109 @@ return {
 };
 `)();
 
+  try {
+    const result = await api.run();
+
+    assert.equal(result.threw, true);
+    assert.match(result.error, /SIGNUP_PHONE_PASSWORD_MISMATCH::Incorrect phone number or password/);
+    assert.equal(result.clicks.length, 0);
+    assert.equal(result.logs.some(({ message }) => /检测到密码页报错/.test(message)), true);
+  } finally {
+    Date.now = originalDateNow;
+  }
+});
+
+test('prepareSignupVerificationFlow stops immediately when phone signup password page shows create-account-failed error', async () => {
+  const api = new Function(`
+const logs = [];
+const clicks = [];
+const location = {
+  href: 'https://auth.openai.com/log-in/password',
+  pathname: '/log-in/password',
+};
+const document = {
+  readyState: 'complete',
+  title: '',
+  body: {
+    textContent: '创建帐户失败，请重试',
+    innerText: '创建帐户失败，请重试',
+  },
+  querySelector() {
+    return null;
+  },
+  querySelectorAll() {
+    return [];
+  },
+};
+
+function throwIfStopped() {}
+function log(message, level = 'info') { logs.push({ message, level }); }
+async function sleep() {}
+async function humanPause() {}
+async function waitForDocumentLoadComplete() {}
+async function waitForVerificationCodeTarget() {}
+function fillInput() {}
+function simulateClick(target) { clicks.push(target?.textContent || 'clicked'); }
+function isActionEnabled() { return true; }
+function getPageTextSnapshot() { return '创建帐户失败，请重试'; }
+function getSignupPasswordTimeoutErrorPageState() { return null; }
+function isVerificationPageStillVisible() { return false; }
+function isPhoneVerificationPageReady() { return false; }
+function isSignupPasswordErrorPage() { return false; }
+function isSignupEmailAlreadyExistsPage() { return false; }
+function getSignupPasswordInput() { return { value: 'Secret123!' }; }
+function getSignupPasswordSubmitButton() { return { textContent: 'Continue', disabled: false }; }
+function getSignupPasswordFieldErrorText() { return '创建帐户失败，请重试'; }
+function isSignupVerificationPageInteractiveReady() { return false; }
+function getStep4PostVerificationState() { return null; }
+function recoverCurrentAuthRetryPage() { throw new Error('should not recover retry page'); }
+function logSignupPasswordDiagnostics() {}
+function createSignupPhonePasswordMismatchError(detailText = '') {
+  return new Error('SIGNUP_PHONE_PASSWORD_MISMATCH::' + detailText);
+}
+function createSignupPhoneAlreadyExistsError(detailText = '') {
+  return new Error('SIGNUP_PHONE_ALREADY_EXISTS::' + detailText);
+}
+function createSignupPhoneCreateAccountFailedError(detailText = '') {
+  return new Error('SIGNUP_PHONE_CREATE_ACCOUNT_FAILED::' + detailText);
+}
+function createSignupAuthRestartCurrentAttemptError(detailText = '') {
+  return new Error('SIGNUP_AUTH_RESTART_CURRENT_ATTEMPT::' + detailText);
+}
+function createSignupUserAlreadyExistsError() {
+  return new Error('SIGNUP_USER_ALREADY_EXISTS::user exists');
+}
+
+const SIGNUP_PHONE_ALREADY_EXISTS_PATTERN = /与此电话号码相关联的帐户已存在|account\\s+associated\\s+with\\s+this\\s+phone\\s+number\\s+already\\s+exists|phone\\s+number.*already\\s+exists|account.*already\\s+linked.*phone|phone\\s+number.*already\\s+linked/i;
+
+${extractConst('SIGNUP_PHONE_PASSWORD_MISMATCH_PATTERN')}
+${extractConst('SIGNUP_PHONE_CREATE_ACCOUNT_FAILED_PATTERN')}
+${extractFunction('isSignupProfilePageUrl')}
+${extractFunction('isLikelyLoggedInChatgptHomeUrl')}
+${extractFunction('inspectSignupVerificationState')}
+${extractFunction('waitForSignupVerificationTransition')}
+${extractFunction('prepareSignupVerificationFlow')}
+
+return {
+  async run() {
+    try {
+      await prepareSignupVerificationFlow({
+        password: 'Secret123!',
+        accountIdentifierType: 'phone',
+        prepareLogLabel: '步骤 3 收尾',
+      }, 10000);
+      return { threw: false, logs, clicks };
+    } catch (error) {
+      return { threw: true, error: error.message, logs, clicks };
+    }
+  },
+};
+`)();
+
   const result = await api.run();
 
   assert.equal(result.threw, true);
-  assert.match(result.error, /SIGNUP_PHONE_PASSWORD_MISMATCH::Incorrect phone number or password/);
+  assert.match(result.error, /SIGNUP_PHONE_CREATE_ACCOUNT_FAILED::创建帐户失败，请重试/);
   assert.equal(result.clicks.length, 0);
   assert.equal(result.logs.some(({ message }) => /检测到密码页报错/.test(message)), true);
 });

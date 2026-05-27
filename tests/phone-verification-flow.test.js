@@ -140,6 +140,61 @@ test('signup phone helper persists signup runtime state without touching add-pho
   assert.ok(!setStateCalls.some((updates) => Object.prototype.hasOwnProperty.call(updates, 'currentPhoneActivation')));
 });
 
+test('signup phone helper times out acquisition before persisting runtime state', async () => {
+  const setStateCalls = [];
+  const requests = [];
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      requests.push(parsedUrl.searchParams.get('action') || '');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const action = parsedUrl.searchParams.get('action');
+      if (action === 'getPrices') {
+        return {
+          ok: true,
+          text: async () => buildHeroSmsPricesPayload(),
+        };
+      }
+      if (action === 'getNumber') {
+        return {
+          ok: true,
+          text: async () => 'ACCESS_NUMBER:slow-signup:66959916439',
+        };
+      }
+      return {
+        ok: true,
+        text: async () => 'ACCESS_READY',
+      };
+    },
+    getState: async () => ({
+      heroSmsApiKey: 'demo-key',
+      signupPhoneAcquireTimeoutMs: 5,
+    }),
+    sendToContentScriptResilient: async () => ({}),
+    setState: async (updates) => {
+      setStateCalls.push(updates);
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    () => helpers.prepareSignupPhoneActivation({
+      heroSmsApiKey: 'demo-key',
+      signupPhoneAcquireTimeoutMs: 5,
+    }),
+    /获取注册手机号超时/
+  );
+
+  assert.equal(
+    setStateCalls.some((updates) => updates.signupPhoneActivation || updates.signupPhoneNumber),
+    false
+  );
+  assert.ok(requests.includes('getPrices'));
+});
+
 test('signup phone helper uses getRentNumber when temporary signup phone toggle is enabled', async () => {
   const requests = [];
   let currentState = {

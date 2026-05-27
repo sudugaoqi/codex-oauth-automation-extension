@@ -444,9 +444,22 @@
       .sort((left, right) => String(left.label || '').localeCompare(String(right.label || '')));
   }
 
-  function collectPriceEntries(payload, entries = []) {
+  function inferFiveSimOperatorFromPath(path = []) {
+    for (let index = path.length - 1; index >= 0; index -= 1) {
+      const value = normalizeFiveSimOperator(path[index]);
+      if (!value || value === DEFAULT_PRODUCT) {
+        continue;
+      }
+      if (value === DEFAULT_OPERATOR || /^virtual\d+$/.test(value)) {
+        return value;
+      }
+    }
+    return '';
+  }
+
+  function collectPriceEntries(payload, entries = [], path = []) {
     if (Array.isArray(payload)) {
-      payload.forEach((entry) => collectPriceEntries(entry, entries));
+      payload.forEach((entry) => collectPriceEntries(entry, entries, path));
       return entries;
     }
     if (!payload || typeof payload !== 'object') {
@@ -460,10 +473,14 @@
         cost,
         count: Number.isFinite(count) ? count : 0,
         inStock: !Number.isFinite(count) || count > 0,
+        ...(() => {
+          const operator = inferFiveSimOperatorFromPath(path);
+          return operator ? { operator } : {};
+        })(),
       });
     }
 
-    Object.values(payload).forEach((entry) => collectPriceEntries(entry, entries));
+    Object.entries(payload).forEach(([key, entry]) => collectPriceEntries(entry, entries, [...path, key]));
     return entries;
   }
 
@@ -504,6 +521,7 @@
     const priceRange = resolvePriceRange(state);
     const userLimit = priceRange.maxPrice;
     let priceCandidates = [];
+    let operatorEntries = [];
 
     try {
       const productsPayload = await fetchProducts(state, countryConfig, deps);
@@ -519,10 +537,12 @@
 
     try {
       const payload = await fetchPrices(state, countryConfig, deps);
+      const detailedEntries = collectPriceEntries(payload, []);
+      operatorEntries = [...operatorEntries, ...detailedEntries];
       priceCandidates = [
         ...priceCandidates,
         ...buildSortedUniquePriceCandidates(
-          collectPriceEntries(payload, [])
+          detailedEntries
             .filter((entry) => entry.inStock)
             .map((entry) => entry.cost)
         ),
@@ -533,10 +553,12 @@
     priceCandidates = buildSortedUniquePriceCandidates(priceCandidates);
 
     const minCatalogPrice = priceCandidates.length > 0 ? priceCandidates[0] : null;
+    const priceAttempts = buildPriceAttempts(priceCandidates, operatorEntries, priceRange);
     if (userLimit !== null) {
       const bounded = priceCandidates.filter((price) => isPriceWithinRange(price, priceRange));
       return {
         prices: bounded.length > 0 ? [userLimit, ...bounded.filter((price) => price !== userLimit)] : [userLimit],
+        priceAttempts,
         userLimit,
         minPrice: priceRange.minPrice,
         minCatalogPrice,
@@ -544,9 +566,9 @@
     }
 
     if (priceCandidates.length > 0) {
-      return { prices: priceCandidates, userLimit: null, minPrice: priceRange.minPrice, minCatalogPrice };
+      return { prices: priceCandidates, priceAttempts, userLimit: null, minPrice: priceRange.minPrice, minCatalogPrice };
     }
-    return { prices: [null], userLimit: null, minPrice: priceRange.minPrice, minCatalogPrice: null };
+    return { prices: [null], priceAttempts: [{ operator: DEFAULT_OPERATOR, maxPrice: null, expectedPrice: null }], userLimit: null, minPrice: priceRange.minPrice, minCatalogPrice: null };
   }
 
   function normalizeActivation(record, fallback = {}) {
@@ -594,6 +616,9 @@
 
   function isTerminalError(payloadOrMessage) {
     const text = describePayload(payloadOrMessage);
+    if (/^\s*<!doctype\s+html|<html[\s>]/i.test(text)) {
+      return false;
+    }
     return /not\s+enough\s+(?:user\s+)?balance|not\s+enough\s+rating|unauthorized|invalid\s+token|banned|bad\s+(?:country|operator)|no\s+product|server\s+offline/i.test(text);
   }
 
@@ -619,11 +644,62 @@
     }
   }
 
-  async function buyActivationWithPrice(state = {}, countryConfig, maxPrice, deps = {}) {
-    const config = resolveConfig(state, deps);
-    const operator = normalizeFiveSimOperator(state.fiveSimOperator);
-    const query = {};
+  function buildPriceAttempts(priceCandidates = [], operatorEntries = [], priceRange = {}) {
+    const attempts = [];
+    const maxPrice = priceRange.maxPrice;
+    const numericPrices = buildSortedUniquePriceCandidates(priceCandidates);
+    const boundedPrices = maxPrice !== null && maxPrice !== undefined
+      ? numericPrices.filter((price) => isPriceWithinRange(price, priceRange))
+      : numericPrices;
+
     if (maxPrice !== null && maxPrice !== undefined) {
+      attempts.push({ operator: DEFAULT_OPERATOR, maxPrice, expectedPrice: maxPrice });
+    }
+    const anyPrices = maxPrice !== null && maxPrice !== undefined ? boundedPrices : numericPrices;
+    anyPrices.forEach((price) => {
+      if (maxPrice !== null && maxPrice !== undefined && Number(price) === Number(maxPrice)) {
+        return;
+      }
+      attempts.push({ operator: DEFAULT_OPERATOR, maxPrice: price, expectedPrice: price });
+    });
+
+    const operatorAttempts = (Array.isArray(operatorEntries) ? operatorEntries : [])
+      .filter((entry) => entry?.inStock)
+      .map((entry) => ({
+        operator: normalizeFiveSimOperator(entry.operator, ''),
+        expectedPrice: normalizePrice(entry.cost),
+      }))
+      .filter((entry) => (
+        entry.operator
+        && entry.operator !== DEFAULT_OPERATOR
+        && entry.expectedPrice !== null
+        && isPriceWithinRange(entry.expectedPrice, priceRange)
+      ))
+      .sort((left, right) => left.expectedPrice - right.expectedPrice)
+      .slice(0, MAX_PRICE_CANDIDATES)
+      .map((entry) => ({ ...entry, maxPrice: null }));
+    attempts.push(...operatorAttempts);
+
+    const seen = new Set();
+    return attempts.filter((attempt) => {
+      const key = `${attempt.operator}|${attempt.maxPrice ?? ''}|${attempt.expectedPrice ?? ''}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+  }
+
+  async function buyActivationWithPrice(state = {}, countryConfig, priceAttempt, deps = {}) {
+    const config = resolveConfig(state, deps);
+    const attempt = priceAttempt && typeof priceAttempt === 'object'
+      ? priceAttempt
+      : { maxPrice: priceAttempt, expectedPrice: priceAttempt };
+    const operator = normalizeFiveSimOperator(attempt.operator || state.fiveSimOperator);
+    const maxPrice = attempt.maxPrice;
+    const query = {};
+    if (operator === DEFAULT_OPERATOR && maxPrice !== null && maxPrice !== undefined) {
       query.maxPrice = maxPrice;
     }
     if (state.fiveSimReuseEnabled !== false) {
@@ -646,6 +722,9 @@
       const error = new Error(`5sim 购买手机号返回不可用响应：${describePayload(payload) || '空响应'}`);
       error.payload = payload;
       throw error;
+    }
+    if (attempt.expectedPrice !== null && attempt.expectedPrice !== undefined && activation.price === undefined) {
+      activation.price = Number(attempt.expectedPrice);
     }
     return activation;
   }
@@ -714,11 +793,17 @@
       const countryConfig = attempt.countryConfig;
       const countryFailures = [];
       const pricePlan = attempt.pricePlan || await resolvePricePlan(state, countryConfig, deps);
-      for (const maxPrice of pricePlan.prices) {
+      const priceAttempts = Array.isArray(pricePlan.priceAttempts) && pricePlan.priceAttempts.length
+        ? pricePlan.priceAttempts
+        : pricePlan.prices.map((maxPrice) => ({ operator: DEFAULT_OPERATOR, maxPrice, expectedPrice: maxPrice }));
+      for (const priceAttempt of priceAttempts) {
         try {
-          const activation = await buyActivationWithPrice(state, countryConfig, maxPrice, deps);
+          const activation = await buyActivationWithPrice(state, countryConfig, priceAttempt, deps);
           if (activation) {
-            const acquiredPrice = getActivationPrice(activation, maxPrice);
+            const acquiredPrice = getActivationPrice(
+              activation,
+              priceAttempt?.expectedPrice ?? priceAttempt?.maxPrice ?? priceAttempt
+            );
             if (!isPriceWithinRange(acquiredPrice, priceRange)) {
               await cancelActivationQuietly(state, activation, deps);
               throw new Error(`5sim activation price ${acquiredPrice} is outside configured price range.`);

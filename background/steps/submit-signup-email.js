@@ -250,6 +250,14 @@
       ).trim();
     }
 
+    function getPhoneSmsProviderLabelForStep2(state = {}) {
+      const provider = String(state?.phoneSmsProvider || '').trim().toLowerCase();
+      if (provider === '5sim') return '5sim';
+      if (provider === 'smsbower') return 'SMSBower';
+      if (provider === 'nexsms') return 'NexSMS';
+      return 'HeroSMS';
+    }
+
     async function cancelFilteredSignupPhoneActivation(state = {}, activation = null) {
       if (!activation || typeof phoneVerificationHelpers?.cancelSignupPhoneActivation !== 'function') {
         return;
@@ -305,6 +313,8 @@
       if (typeof phoneVerificationHelpers?.prepareSignupPhoneActivation !== 'function') {
         throw new Error('手机号注册流程不可用：接码模块尚未初始化。');
       }
+      const providerLabel = getPhoneSmsProviderLabelForStep2(state);
+      await addLog(`步骤 2：手机号注册入口已就绪，正在从 ${providerLabel} 获取注册手机号...`);
       const activation = await acquireUnusedSignupPhoneActivation(state);
       return {
         phoneNumber: activation.phoneNumber,

@@ -68,7 +68,7 @@ test('5sim provider maps countries and prices', async () => {
   );
   assert.equal(requests[1].url.searchParams.get('country'), 'vietnam');
   assert.equal(requests[1].url.searchParams.get('product'), 'openai');
-  assert.deepStrictEqual(entries, [{ cost: 10, count: 2, inStock: true }]);
+  assert.deepStrictEqual(entries, [{ cost: 10, count: 2, inStock: true, operator: 'any' }]);
 });
 
 test('5sim provider buys, checks, finishes, cancels, bans, and reuses activation', async () => {
@@ -180,6 +180,64 @@ test('5sim provider prefers buy-compatible products price over operator detail p
   );
 });
 
+test('5sim provider falls back to concrete in-stock operator when any buy fails', async () => {
+  const requests = [];
+  const provider = api.createProvider({
+    fetchImpl: async (url) => {
+      const parsed = new URL(url);
+      requests.push(parsed);
+      if (parsed.pathname === '/v1/guest/products/italy/any') {
+        return createTextResponse({ openai: { Category: 'activation', Qty: 62160, Price: 0.08 } });
+      }
+      if (parsed.pathname === '/v1/guest/prices') {
+        return createTextResponse({
+          italy: {
+            openai: {
+              virtual21: { cost: 0.0769, count: 0 },
+              virtual51: { cost: 0.1282, count: 20720 },
+              virtual59: { cost: 0.1538, count: 20720 },
+            },
+          },
+        });
+      }
+      if (parsed.pathname === '/v1/user/buy/activation/italy/any/openai') {
+        return createTextResponse('<!DOCTYPE html><html id="__next_error__"></html>', false, 404);
+      }
+      if (parsed.pathname === '/v1/user/buy/activation/italy/virtual51/openai') {
+        return createTextResponse({
+          id: 5101,
+          phone: '+393331112222',
+          country: 'italy',
+          operator: 'virtual51',
+          price: 0.1282,
+          status: 'PENDING',
+        });
+      }
+      throw new Error(`unexpected ${parsed.pathname}`);
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  const activation = await provider.requestActivation({
+    fiveSimApiKey: 'demo-key',
+    fiveSimCountryId: 'italy',
+    fiveSimCountryLabel: '意大利 (Italy)',
+    fiveSimOperator: 'any',
+    fiveSimMaxPrice: '0.2',
+  });
+
+  assert.equal(activation.activationId, '5101');
+  assert.equal(activation.countryId, 'italy');
+  assert.equal(activation.price, 0.1282);
+  assert.equal(
+    requests.some((entry) => entry.pathname === '/v1/user/buy/activation/italy/virtual51/openai'),
+    true
+  );
+  const concreteBuy = requests.find((entry) => entry.pathname === '/v1/user/buy/activation/italy/virtual51/openai');
+  assert.equal(concreteBuy.searchParams.has('maxPrice'), false);
+});
+
 test('5sim provider rejects maxPrice with custom operator before buying', async () => {
   const requests = [];
   const provider = api.createProvider({
@@ -280,6 +338,9 @@ test('5sim provider reports raw buy payload when HTTP 200 response has no activa
         return createTextResponse({ vietnam: { openai: { virtual47: { cost: 0.1282, count: 10 } } } });
       }
       if (parsed.pathname === '/v1/user/buy/activation/vietnam/any/openai') {
+        return createTextResponse({ status: 'no free phones', detail: 'operator unavailable' });
+      }
+      if (parsed.pathname === '/v1/user/buy/activation/vietnam/virtual47/openai') {
         return createTextResponse({ status: 'no free phones', detail: 'operator unavailable' });
       }
       throw new Error(`unexpected ${parsed.pathname}`);

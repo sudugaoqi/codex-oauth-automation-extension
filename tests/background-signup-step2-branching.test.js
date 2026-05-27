@@ -94,6 +94,7 @@ test('step 2 keeps password flow when landing on password page', async () => {
 
 test('step 2 uses phone activation when resolved signup method is phone', async () => {
   const completedPayloads = [];
+  const logs = [];
   const sequence = [];
   const sentPayloads = [];
   const activation = {
@@ -108,7 +109,9 @@ test('step 2 uses phone activation when resolved signup method is phone', async 
   };
 
   const executor = step2Api.createStep2Executor({
-    addLog: async () => {},
+    addLog: async (message, level = 'info') => {
+      logs.push({ message, level });
+    },
     chrome: { tabs: { update: async () => {} } },
     completeStepFromBackground: async (step, payload) => {
       completedPayloads.push({ step, payload });
@@ -153,13 +156,17 @@ test('step 2 uses phone activation when resolved signup method is phone', async 
     SIGNUP_PAGE_INJECT_FILES: [],
   });
 
-  await executor.executeStep2({ signupMethod: 'phone' });
+  await executor.executeStep2({ signupMethod: 'phone', phoneSmsProvider: '5sim' });
 
   assert.deepStrictEqual(sequence, [
     'ensureSignupPhoneEntryReady',
     'prepareSignupPhoneActivation',
     'submitSignupPhone',
   ]);
+  assert.ok(
+    logs.some(({ message }) => /手机号注册入口已就绪，正在从 5sim 获取注册手机号/.test(message)),
+    'step 2 should log that it is acquiring a signup phone after switching to phone entry'
+  );
   assert.deepStrictEqual(sentPayloads, [
     {
       signupMethod: 'phone',

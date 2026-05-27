@@ -103,6 +103,7 @@
     const PHONE_ROUTE_405_RECOVERY_FAILED_ERROR_PREFIX = 'PHONE_ROUTE_405_RECOVERY_FAILED::';
     const PHONE_MANUAL_FREE_REUSE_ERROR_PREFIX = 'PHONE_MANUAL_FREE_REUSE::';
     const PHONE_AUTO_FREE_REUSE_PREPARE_ERROR_PREFIX = 'PHONE_AUTO_FREE_REUSE_PREPARE::';
+    const SIGNUP_PHONE_ACQUIRE_TIMEOUT_MS = 90000;
     const FREE_PHONE_REUSE_PREPARE_TIMEOUT_MS = 20000;
     const FREE_PHONE_REUSE_PREPARE_INTERVAL_MS = 2000;
     const FREE_PHONE_REUSE_PREPARE_MAX_ROUNDS = 10;
@@ -926,6 +927,70 @@
         return state?.fiveSimReuseEnabled !== false;
       }
       return normalizeHeroSmsReuseEnabled(state?.heroSmsReuseEnabled);
+    }
+
+    function normalizeSignupPhoneAcquireTimeoutMs(state = {}) {
+      const configured = Number(state?.signupPhoneAcquireTimeoutMs);
+      if (Number.isFinite(configured) && configured > 0) {
+        return Math.max(1, Math.floor(configured));
+      }
+      return SIGNUP_PHONE_ACQUIRE_TIMEOUT_MS;
+    }
+
+    async function runSignupPhoneAcquireWithTimeout(state = {}, action) {
+      const timeoutMs = normalizeSignupPhoneAcquireTimeoutMs(state);
+      let timeoutId = null;
+
+      try {
+        return await Promise.race([
+          action(),
+          new Promise((_, reject) => {
+            timeoutId = setTimeout(() => {
+              reject(new Error(`步骤 2：获取注册手机号超时（>${Math.ceil(timeoutMs / 1000)} 秒）。`));
+            }, timeoutMs);
+          }),
+        ]);
+      } catch (error) {
+        if (error?.name === 'AbortError') {
+          throw new Error(`步骤 2：获取注册手机号超时（>${Math.ceil(timeoutMs / 1000)} 秒）。`);
+        }
+        throw error;
+      } finally {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+      }
+    }
+
+    async function acquireSignupPhoneActivationWithTimeout(state = {}, options = {}) {
+      let acquiredAfterTimeout = null;
+      let timedOut = false;
+      const acquirePromise = acquirePhoneActivation(state, {
+        ...options,
+        logLabel: options?.logLabel || '步骤 2',
+        useSignupTempNumber: Boolean(state?.signupPhoneUseTempNumber),
+      }).then((activation) => {
+        if (timedOut) {
+          acquiredAfterTimeout = activation;
+        }
+        return activation;
+      });
+
+      try {
+        return await runSignupPhoneAcquireWithTimeout(state, () => acquirePromise);
+      } catch (error) {
+        const message = String(error?.message || '');
+        timedOut = /获取注册手机号超时/.test(message);
+        if (timedOut) {
+          acquirePromise
+            .then((activation) => cancelPhoneActivation(state, activation).catch(() => {}))
+            .catch(() => {});
+          if (acquiredAfterTimeout) {
+            await cancelPhoneActivation(state, acquiredAfterTimeout).catch(() => {});
+          }
+        }
+        throw error;
+      }
     }
 
     function createResolvedFiveSimProvider() {
@@ -5108,11 +5173,7 @@
 
     async function prepareSignupPhoneActivation(state = {}, options = {}) {
       return withPhoneVerificationLogContext({ step: 2, stepKey: 'submit-signup-email' }, async () => {
-        const activation = await acquirePhoneActivation(state, {
-          ...options,
-          logLabel: options?.logLabel || '步骤 2',
-          useSignupTempNumber: Boolean(state?.signupPhoneUseTempNumber),
-        });
+        const activation = await acquireSignupPhoneActivationWithTimeout(state, options);
         const normalizedActivation = normalizeActivation(activation);
         if (!normalizedActivation) {
           throw new Error('步骤 2：接码平台返回的手机号订单无效。');
